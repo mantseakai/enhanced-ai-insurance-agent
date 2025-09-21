@@ -1,16 +1,23 @@
-// File: backend/src/services/AIServiceMultiLLM.ts
-// Replace your current AIService.ts with this version
+// File: backend/src/services/AIService.ts
+// Fixed version with proper context handling
 
 import { VectorStoreManager } from '../core/vector/managers/VectorStoreManager';
 import { VectorStoreProvider } from '../core/vector/interfaces/VectorStoreProvider';
 import { LLMManager } from '../core/llm/managers/LLMManager';
 import { LLMProvider } from '../core/llm/interfaces/LLMProvider';
 import { SimpleCache } from '../core/cache/SimpleCache';
+import { CompanyManager } from '../core/companies/CompanyManager';
+import { CompanyConfig } from '../types/CompanyTypes';
 
-// Import existing types for backward compatibility
+// FIXED: Simplified imports - only use UnifiedQueryContext
 import {
-  QueryContext,
-  EnhancedQueryContext,
+  UnifiedQueryContext,
+  ContextBuilder,
+  ContextValidator,
+  ContextUtils
+} from '../types/UnifiedContext';
+
+import {
   AIAnalysis,
   ContextualQueryResult,
   CustomerProfile,
@@ -30,12 +37,14 @@ export interface AIResponse {
   providerUsed?: string;
   cost?: number;
   responseTime?: number;
+  companyId?: string;
 }
 
 export class AIService {
   private vectorStore: VectorStoreProvider | null = null;
   private vectorManager: VectorStoreManager;
   private llmManager: LLMManager;
+  private companyManager: CompanyManager;
   private conversationHistory: Map<string, any[]> = new Map();
   private customerProfiles: Map<string, CustomerProfile> = new Map();
   private currentState: string = 'initial_contact';
@@ -53,6 +62,7 @@ export class AIService {
     // Get manager instances
     this.vectorManager = VectorStoreManager.getInstance();
     this.llmManager = LLMManager.getInstance();
+    this.companyManager = CompanyManager.getInstance();
     
     // Initialize caches
     this.responseCache = SimpleCache.getInstance(200, 300000); // 5 min cache
@@ -61,7 +71,10 @@ export class AIService {
 
   async initialize(): Promise<void> {
     try {
-      console.log('🚀 Initializing AI Service with Multi-LLM support...');
+      console.log('🚀 Initializing AI Service with Multi-Company & Multi-LLM support...');
+      
+      // Initialize company manager first
+      await this.companyManager.initialize();
       
       // Initialize vector store
       this.vectorStore = await this.vectorManager.initialize();
@@ -72,13 +85,14 @@ export class AIService {
       // Verify setup
       const stats = await this.vectorStore.getStats();
       const providers = this.llmManager.getInitializedProviders();
+      const companies = this.companyManager.getActiveCompanies();
       
       console.log(`📊 Vector store ready: ${stats.documentCount} documents available`);
       console.log(`🤖 LLM providers available: ${providers.join(', ')}`);
-      console.log(`🎯 Active LLM provider: ${this.llmManager.getActiveProvider().name}`);
+      console.log(`🏢 Companies configured: ${companies.length}`);
       
       this.initialized = true;
-      console.log('✅ AI Service with Multi-LLM initialized successfully');
+      console.log('✅ AI Service with Multi-Company & Multi-LLM initialized successfully');
       
     } catch (error) {
       console.error('❌ Failed to initialize AI Service:', error);
@@ -86,10 +100,12 @@ export class AIService {
     }
   }
 
+  // FIXED: Main processing method with proper context handling
   async processMessage(
     message: string,
     userId: string,
-    context: QueryContext | EnhancedQueryContext = {}
+    context: UnifiedQueryContext = {},
+    companyId?: string  // Optional for backward compatibility
   ): Promise<AIResponse> {
     // Concurrency control
     if (this.activeRequests >= this.maxConcurrentRequests) {
@@ -105,149 +121,160 @@ export class AIService {
         await this.initialize();
       }
 
-      console.log(`🤖 Processing message from ${userId}: "${message.substring(0, 50)}..."`);
+      // FIXED: Determine company context and build unified context
+      const effectiveCompanyId = companyId || context.companyId || 'default';
+      const companyConfig = await this.companyManager.getCompanyConfig(effectiveCompanyId);
+      
+      console.log(`🤖 Processing message from ${userId} for company ${effectiveCompanyId}: "${message.substring(0, 50)}..."`);
 
-      // Check response cache first
-      const cacheKey = SimpleCache.generateKey('response', message, context);
-      const cachedResponse = this.responseCache.get(cacheKey);
-      if (cachedResponse) {
-        console.log('⚡ Using cached response');
+      // FIXED: Build unified context with company information and auto-enrichment
+      const unifiedContext = ContextUtils.enrichContext({
+        ...context,
+        companyId: effectiveCompanyId,
+        companyConfig,
+        userId,
+        timestamp: context.timestamp || new Date().toISOString(),
+        platform: context.platform || 'api',
+        customerType: context.customerType || 'individual'
+      }, message);
+
+      // FIXED: Company-aware cache key using the properly defined unifiedContext
+      const cacheKey = SimpleCache.generateKey('response', message, { 
+        companyId: effectiveCompanyId,
+        userId,
+        stage: unifiedContext.conversationStage 
+      });
+      
+      const cachedResponse = await this.responseCache.get<AIResponse>(cacheKey);
+      if (cachedResponse !== null) {
+        console.log('⚡ Using cached response for company:', effectiveCompanyId);
         return {
           ...cachedResponse,
-          responseTime: Date.now() - startTime
-        } as AIResponse;
+          responseTime: Date.now() - startTime,
+          companyId: effectiveCompanyId
+        };
       }
 
-      // Auto-select optimal LLM provider
-      await this.selectOptimalProvider(message, context);
+      // Company-specific LLM provider selection
+      await this.selectOptimalProviderForCompany(message, unifiedContext, companyConfig);
 
-      // 1. Analyze user input (simplified for speed)
-      const analysis = await this.analyzeUserInputFast(message, context);
+      // 1. Analyze user intent with company context
+      const analysis = await this.analyzeUserIntentWithCompany(message, unifiedContext);
+      
+      // 2. Query company-specific knowledge base
+      const knowledgeResult = await this.queryCompanyKnowledgeBase(message, unifiedContext, analysis);
+      
+      // 3. Generate company-branded response
+      const response = await this.generateCompanyResponse(
+        message, 
+        unifiedContext, 
+        analysis, 
+        knowledgeResult,
+        companyConfig
+      );
 
-      // 2. Query knowledge base
-      const knowledgeResults = await this.queryKnowledgeBase(message, context, analysis);
+      // 4. Update conversation history with company context
+      this.updateConversationHistory(userId, message, response, effectiveCompanyId);
 
-      // 3. Update conversation history
-      this.updateConversationHistory(userId, message, analysis);
+      // Cache the response with company context
+      this.responseCache.set(cacheKey, response, 300000);
 
-      // 4. Generate contextual response with current LLM
-      const response = await this.generateResponseWithLLM(message, knowledgeResults, analysis, context);
-
-      // 5. Update customer profile (async)
-      setImmediate(() => this.updateCustomerProfile(userId, analysis, context));
-
-      // Add metadata
-      const finalResponse = {
+      return {
         ...response,
         responseTime: Date.now() - startTime,
-        providerUsed: this.llmManager.getActiveProvider().name
+        companyId: effectiveCompanyId
       };
-
-      // Cache the response
-      this.responseCache.set(cacheKey, finalResponse, 300000);
-
-      console.log(`✅ Response generated for ${userId} via ${finalResponse.providerUsed} (${finalResponse.responseTime}ms)`);
-      return finalResponse;
 
     } catch (error) {
       console.error('❌ Error processing message:', error);
-      return this.generateFallbackResponse(message, Date.now() - startTime);
+      
+      return {
+        message: "I apologize for the technical issue. Our team will assist you shortly.",
+        confidence: 0.1,
+        responseTime: Date.now() - startTime,
+        companyId: companyId || 'default'
+      };
+      
     } finally {
       this.activeRequests--;
     }
   }
 
-  /**
-   * Select optimal LLM provider based on context
-   */
-  private async selectOptimalProvider(
-    message: string,
-    context: QueryContext | EnhancedQueryContext
+  // Company-specific LLM provider selection
+  private async selectOptimalProviderForCompany(
+    message: string, 
+    context: UnifiedQueryContext, 
+    companyConfig: CompanyConfig
   ): Promise<void> {
     try {
-      // Default selection criteria
-      let criteria: 'cost' | 'speed' | 'quality' = 'speed';
-      
-      // Analyze message to determine optimal provider
-      const lowerMessage = message.toLowerCase();
-      
-      // Use quality provider for complex or important queries
-      if (lowerMessage.includes('premium') || 
-          lowerMessage.includes('calculate') || 
-          lowerMessage.includes('complex') ||
-          (context as any).stage === 'decision') {
-        criteria = 'quality';
-      }
-      // Use fast provider for simple queries
-      else if (lowerMessage.includes('hello') || 
-               lowerMessage.includes('yes') || 
-               lowerMessage.includes('no') ||
-               lowerMessage.length < 20) {
-        criteria = 'speed';
-      }
-      // Use cost-effective provider for general queries
-      else {
-        criteria = 'cost';
+      // Use company's preferred LLM provider if specified
+      if (companyConfig.preferredLLMProvider) {
+        const provider = this.llmManager.getProvider(companyConfig.preferredLLMProvider);
+        if (provider) {
+          await this.llmManager.setActiveProvider(companyConfig.preferredLLMProvider);
+          console.log(`🎯 Using company preferred LLM: ${companyConfig.preferredLLMProvider}`);
+          return;
+        }
       }
 
-      const estimatedTokens = Math.ceil(message.length / 4) + 100; // Rough estimate
-      
-      await this.llmManager.autoSelectProvider({
-        prioritize: criteria,
-        promptTokens: estimatedTokens,
-        completionTokens: 100
-      });
+      // Fallback to intelligent selection based on company's priorities
+      const criteria = {
+        prioritize: companyConfig.llmPriority || 'cost' as 'cost' | 'speed' | 'quality',
+        promptTokens: this.estimateTokens(message),
+        completionTokens: 500
+      };
 
+      await this.llmManager.autoSelectProvider(criteria);
+      
     } catch (error) {
-      console.warn('⚠️ Provider auto-selection failed, using current provider:', (error as Error).message);
+      console.warn('⚠️ Provider selection failed, using default:', error);
+      // Fallback to default provider
     }
   }
 
-  private async waitForSlot(): Promise<void> {
-    return new Promise((resolve) => {
-      const checkSlot = () => {
-        if (this.activeRequests < this.maxConcurrentRequests) {
-          resolve();
-        } else {
-          setTimeout(checkSlot, 100);
-        }
-      };
-      checkSlot();
-    });
-  }
-
-  private async analyzeUserInputFast(
-    message: string,
-    context: QueryContext | EnhancedQueryContext
+  // Company-specific intent analysis
+  private async analyzeUserIntentWithCompany(
+    message: string, 
+    context: UnifiedQueryContext
   ): Promise<AIAnalysis> {
+    const cacheKey = SimpleCache.generateKey('analysis', message, { companyId: context.companyId });
+    const cached = await this.analysisCache.get<AIAnalysis>(cacheKey);
+    if (cached !== null) return cached;
+
     try {
-      // Check analysis cache
-      const cacheKey = SimpleCache.generateKey('analysis', message);
-      const cached = this.analysisCache.get(cacheKey);
-      if (cached) {
-        return { ...this.getDefaultAnalysis(), ...cached };
-      }
-
-      // Fast pattern-based analysis first
-      const fastAnalysis = this.performFastAnalysis(message);
-      if (fastAnalysis) {
-        this.analysisCache.set(cacheKey, fastAnalysis, 600000);
-        return fastAnalysis;
-      }
-
-      // Use LLM for complex analysis
       const llmProvider = this.llmManager.getActiveProvider();
       
-      const analysisPrompt = [
+      // Enhanced analysis prompt with company context
+      const analysisPrompt = `
+        Analyze this insurance customer message for ${context.companyConfig?.name || 'insurance company'}:
+        
+        Message: "${message}"
+        Company Context: ${context.companyConfig?.businessType || 'general insurance'}
+        Previous Stage: ${context.conversationStage || 'initial'}
+        Platform: ${context.platform || 'unknown'}
+        Customer Type: ${context.customerType || 'individual'}
+        
+        Return JSON with:
         {
-          role: 'user' as const,
-          content: `Analyze: "${message}" Return JSON: {"primaryIntent":"information|quote|purchase|claim","insuranceType":"auto|health|life|business|general","urgencyLevel":"high|medium|low","leadReadiness":"hot|warm|cold","confidence":0.8}`
+          "intent": "quote_request|information_seeking|support|comparison|complaint",
+          "insuranceType": "auto|health|life|business|property|travel",
+          "urgency": "low|medium|high",
+          "leadScore": 0-100,
+          "extractedInfo": {
+            "age": null,
+            "location": null,
+            "specificNeeds": []
+          },
+          "nextActions": [],
+          "confidence": 0-1
         }
-      ];
+      `;
 
       const response = await Promise.race([
-        llmProvider.generateCompletion(analysisPrompt, {
-          maxTokens: 150,
+        llmProvider.generateCompletion([
+          { role: 'user', content: analysisPrompt }
+        ], {
+          maxTokens: 200,
           temperature: 0.1
         }),
         this.createTimeoutPromise(4000, 'Analysis timed out')
@@ -263,7 +290,6 @@ export class AIService {
         console.warn('JSON parse failed, using pattern analysis');
         analysis = this.performFastAnalysis(message) || this.getDefaultAnalysis();
       }
-
       
       // Cache the analysis
       this.analysisCache.set(cacheKey, analysis, 600000);
@@ -276,9 +302,10 @@ export class AIService {
     }
   }
 
-  private async queryKnowledgeBase(
+  // Company-specific knowledge base querying
+  private async queryCompanyKnowledgeBase(
     query: string,
-    context: QueryContext | EnhancedQueryContext,
+    context: UnifiedQueryContext,
     analysis: AIAnalysis
   ): Promise<ContextualQueryResult> {
     try {
@@ -286,439 +313,293 @@ export class AIService {
         throw new Error('Vector store not initialized');
       }
 
-      // Build enhanced query
-      const enhancedQuery = this.buildEnhancedQuery(query, analysis, context);
+      // Build enhanced query with company context
+      const enhancedQuery = this.buildCompanyEnhancedQuery(query, analysis, context);
 
-      // Search vector store
-      const topK = 2; // Reduced for speed
-      const searchResults = await this.vectorStore.searchByText(enhancedQuery, topK);
+      // Search with company filtering
+      const searchResults = await this.vectorStore.searchByText(enhancedQuery, 3, {
+        filter: {
+          companyId: context.companyId
+        }
+      });
 
       // Convert to ContextualQueryResult format
       const documents = searchResults.map(result => ({
         id: result.document.id,
-        content: result.document.content.substring(0, 1000),
+        content: result.document.content.substring(0, 1200),
         metadata: {
-          type: result.document.metadata.type || 'product',
-          category: result.document.metadata.category || 'general',
-          priority: result.document.metadata.priority || 'medium',
-          companyId: result.document.metadata.companyId || 'default',
-          version: result.document.metadata.version || '1.0',
-          lastUpdated: result.document.metadata.lastUpdated || new Date(),
-          ...result.document.metadata
+          type: result.document.metadata?.type || 'insurance_document',
+          source: result.document.metadata?.source || 'knowledge_base',
+          companyId: context.companyId,
+          relevanceScore: result.score,
+          timestamp: new Date().toISOString()
         }
-      })) as EnhancedRAGDocument[];
+      }));
+
+      const avgScore = documents.length > 0 
+        ? documents.reduce((sum, doc) => sum + (doc.metadata.relevanceScore || 0), 0) / documents.length 
+        : 0;
 
       return {
         documents,
-        context: documents.map(doc => doc.content).join('\n\n---\n\n'),
-        confidence: this.calculateConfidence(searchResults),
-        relevanceScore: this.calculateRelevanceScore(searchResults),
-        metadata: this.extractMetadata(documents),
-        contextualFactors: this.calculateContextualFactors(searchResults, analysis),
-        recommendations: this.generateRecommendations(searchResults, analysis),
-        premiumCalculation: this.extractPremiumCalculationInfo(documents)
+        totalResults: searchResults.length,
+        averageScore: avgScore,
+        searchQuery: enhancedQuery,
+        processingTime: Date.now()
       };
 
     } catch (error) {
-      console.error('❌ Error querying knowledge base:', error);
-      return this.getFallbackKnowledgeResult();
+      console.error('❌ Knowledge base query failed:', error);
+      return {
+        documents: [],
+        totalResults: 0,
+        averageScore: 0,
+        searchQuery: query,
+        processingTime: Date.now()
+      };
     }
   }
 
-  private async generateResponseWithLLM(
+  // Company-specific response generation
+  private async generateCompanyResponse(
     message: string,
-    knowledgeResults: ContextualQueryResult,
+    context: UnifiedQueryContext,
     analysis: AIAnalysis,
-    context: QueryContext | EnhancedQueryContext
+    knowledgeResult: ContextualQueryResult,
+    companyConfig: CompanyConfig
   ): Promise<AIResponse> {
     try {
-      // Check for template responses first
-      const templateResponse = this.generateTemplateResponse(message, analysis, knowledgeResults);
-      if (templateResponse) {
-        return templateResponse;
+      const llmProvider = this.llmManager.getActiveProvider();
+      const startTime = Date.now();
+
+      // Build company-specific context
+      const contextDocs = knowledgeResult.documents
+        .map(doc => `[${doc.metadata.type}] ${doc.content}`)
+        .join('\n\n');
+
+      // Company-specific system prompt
+      const systemPrompt = `You are an AI insurance assistant for ${companyConfig.name}.
+        
+        Company Information:
+        - Name: ${companyConfig.name}
+        - Business Type: ${companyConfig.businessType || 'insurance'}
+        - Brand Voice: ${companyConfig.branding?.brandVoice || 'professional and friendly'}
+        - Contact Info: ${companyConfig.contactInfo?.phone || 'Contact us for more details'}
+        
+        Customer Context:
+        - Intent: ${analysis.intent}
+        - Insurance Type: ${analysis.insuranceType}
+        - Lead Score: ${analysis.leadScore}
+        - Platform: ${context.platform}
+        
+        Available Knowledge:
+        ${contextDocs}
+        
+        Instructions:
+        1. Respond in ${companyConfig.branding?.brandVoice || 'professional'} tone
+        2. Include company-specific contact information when relevant
+        3. Mention ${companyConfig.name} naturally in the response
+        4. Focus on ${analysis.insuranceType} insurance if identified
+        5. Keep responses concise and actionable
+        6. Use Ghana-specific language and context
+        `;
+
+      const userPrompt = `Customer message: "${message}"
+        
+        Generate a helpful response that addresses their needs while representing ${companyConfig.name} professionally.`;
+
+      const response = await Promise.race([
+        llmProvider.generateCompletion([
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
+        ], {
+          maxTokens: 400,
+          temperature: 0.7
+        }),
+        this.createTimeoutPromise(8000, 'Response generation timed out')
+      ]);
+
+      // Calculate premium quote if relevant
+      let premiumQuote = null;
+      if (analysis.intent === 'quote_request' && analysis.extractedInfo) {
+        try {
+          premiumQuote = await this.calculatePremium(analysis, context.companyId || 'default');
+        } catch (error) {
+          console.warn('Premium calculation failed:', error);
+        }
       }
 
-      // Use current LLM provider
-      const llmProvider = this.llmManager.getActiveProvider();
-      
-      const messages = [
-        {
-          role: 'system' as const,
-          content: 'You are a helpful Ghana insurance agent. Be concise and professional.'
-        },
-        {
-          role: 'user' as const,
-          content: `Customer: "${message}"
-Knowledge: ${knowledgeResults.context.substring(0, 800)}
-Response (max 150 words):`
-        }
-      ];
-
-      const response = await llmProvider.generateCompletion(messages, {
-        maxTokens: 200,
-        temperature: 0.7
-      });
-
-      // Calculate estimated cost
-      const cost = llmProvider.estimateCost(
-        response.usage?.promptTokens || 0,
-        response.usage?.completionTokens || 0
-      );
-
       return {
-        message: response.content || 'I understand you need help with insurance. How can I assist you today?',
-        confidence: knowledgeResults.confidence,
-        shouldCaptureLead: analysis.leadReadiness === 'hot' || analysis.leadReadiness === 'warm',
-        leadScore: this.calculateLeadScore(analysis),
-        contextualFactors: knowledgeResults.contextualFactors,
-        nextActions: knowledgeResults.recommendations.nextBestActions,
-        conversationStage: analysis.conversationStage,
-        cost
+        message: response.content,
+        confidence: analysis.confidence || 0.8,
+        shouldCaptureLead: analysis.leadScore > 60,
+        leadScore: analysis.leadScore,
+        premiumQuote,
+        nextActions: analysis.nextActions || [],
+        conversationStage: this.determineNextStage(analysis),
+        providerUsed: llmProvider.name,
+        cost: this.estimateCost(response),
+        companyId: context.companyId
       };
 
     } catch (error) {
-      console.error('❌ Error generating LLM response:', error);
-      return this.generateFallbackResponse(message);
-    }
-  }
-
-  // Helper methods (same as before but simplified)
-  private performFastAnalysis(message: string): AIAnalysis | null {
-    const lowerMessage = message.toLowerCase();
-    
-    const patterns = {
-      quote: /cost|price|premium|how much|quote|afford/,
-      auto: /car|vehicle|auto|toyota|camry|driving|accident/,
-      health: /health|medical|hospital|nhis|doctor/,
-      payment: /pay|momo|mobile money|mtn|vodafone|cash/,
-      claim: /claim|accident|damage|emergency/,
-      urgent: /urgent|emergency|now|asap|immediately/
-    };
-
-    const defaultAnalysis = this.getDefaultAnalysis();
-    let analysis: AIAnalysis = { ...defaultAnalysis };
-
-    if (patterns.quote.test(lowerMessage)) {
-      analysis.primaryIntent = 'quote';
-      analysis.leadReadiness = 'warm';
-    } else if (patterns.claim.test(lowerMessage)) {
-      analysis.primaryIntent = 'claim';
-      analysis.urgencyLevel = 'high';
-    } else {
-      analysis.primaryIntent = 'information';
-      analysis.leadReadiness = 'cold';
-    }
-
-    if (patterns.auto.test(lowerMessage)) {
-      analysis.insuranceType = 'auto';
-    } else if (patterns.health.test(lowerMessage)) {
-      analysis.insuranceType = 'health';
-    } else {
-      analysis.insuranceType = 'general';
-    }
-
-    if (patterns.urgent.test(lowerMessage)) {
-      analysis.urgencyLevel = 'high';
-    } else if (patterns.quote.test(lowerMessage)) {
-      analysis.urgencyLevel = 'medium';
-    } else {
-      analysis.urgencyLevel = 'low';
-    }
-
-    if (analysis.primaryIntent && analysis.insuranceType) {
+      console.error('❌ Response generation failed:', error);
+      
+      // Fallback company response
       return {
-        ...defaultAnalysis,
-        ...analysis,
-        confidence: 0.8,
-        conversationStage: analysis.primaryIntent === 'quote' ? 'consideration' : 'awareness'
-      };
-    }
-
-    return null;
-  }
-
-  private generateTemplateResponse(
-    message: string,
-    analysis: AIAnalysis,
-    knowledgeResults: ContextualQueryResult
-  ): AIResponse | null {
-    const lowerMessage = message.toLowerCase();
-
-    if (analysis.insuranceType === 'auto' && analysis.primaryIntent === 'information') {
-      return {
-        message: `Hello! I'd be happy to help you with auto insurance in Ghana. Our comprehensive coverage includes third-party liability (mandatory), own damage protection, theft coverage, and natural disaster protection. For a vehicle like yours, premiums typically range from GHS 800-3000 annually depending on the vehicle value and your location. Would you like a personalized quote?`,
-        confidence: 0.9,
+        message: `Thank you for contacting ${companyConfig.name}. We're experiencing technical difficulties but our team will assist you shortly. Please call ${companyConfig.contactInfo?.phone || 'our support line'} for immediate assistance.`,
+        confidence: 0.3,
         shouldCaptureLead: true,
-        leadScore: 7,
-        conversationStage: 'consideration'
+        leadScore: 50,
+        conversationStage: 'support_needed',
+        companyId: context.companyId
       };
     }
-
-    if (lowerMessage.includes('momo') || lowerMessage.includes('pay')) {
-      return {
-        message: `Yes, you can definitely pay your insurance premiums using MTN MoMo, Vodafone Cash, or AirtelTigo Money. Mobile money is very popular in Ghana - over 60% of our customers use it! The transaction fee is typically GHS 0.75, and payment is instant with SMS confirmation. You can also set up auto-renewal for continuous coverage. Would you like me to help you get started?`,
-        confidence: 0.95,
-        shouldCaptureLead: true,
-        leadScore: 8,
-        conversationStage: 'decision'
-      };
-    }
-
-    return null;
   }
 
-  private createTimeoutPromise(ms: number, message: string = 'Operation timed out'): Promise<never> {
-    return new Promise((_, reject) => {
-      setTimeout(() => reject(new Error(`${message} after ${ms}ms`)), ms);
-    });
-  }
-
-  private buildEnhancedQuery(
-    originalQuery: string,
-    analysis: AIAnalysis,
-    context: QueryContext | EnhancedQueryContext
+  // Company-enhanced query building
+  private buildCompanyEnhancedQuery(
+    originalQuery: string, 
+    analysis: AIAnalysis, 
+    context: UnifiedQueryContext
   ): string {
-    let enhancedQuery = originalQuery;
-
-    if (analysis.insuranceType && analysis.insuranceType !== 'general') {
-      enhancedQuery += ` ${analysis.insuranceType}`;
-    }
-
-    enhancedQuery += ' Ghana';
-
-    return enhancedQuery;
-  }
-
-  // Simplified helper methods
-  private calculateConfidence(searchResults: any[]): number {
-    if (searchResults.length === 0) return 0.4;
-    const avgScore = searchResults.reduce((sum, r) => sum + r.score, 0) / searchResults.length;
-    return Math.min(avgScore + 0.1, 0.95);
-  }
-
-  private calculateRelevanceScore(searchResults: any[]): number {
-    return this.calculateConfidence(searchResults);
-  }
-
-  private extractMetadata(documents: any[]): any {
-    return {
-      hasProductInfo: documents.some(d => d.metadata.type === 'product'),
-      hasObjectionHandling: documents.some(d => d.metadata.type === 'objection'),
-      hasMarketContext: documents.some(d => d.metadata.type === 'market_context'),
-      hasPremiumCalculation: documents.some(d => d.metadata.type === 'premium_calculation'),
-      hasRiskFactors: documents.some(d => d.metadata.type === 'risk_factors'),
-      hasClaimsInfo: documents.some(d => d.metadata.type === 'claims'),
-      hasLocalRelevance: documents.some(d => d.metadata.region === 'ghana'),
-      seasonalRelevance: true
-    };
-  }
-
-  private calculateContextualFactors(searchResults: any[], analysis: AIAnalysis): any {
-    return {
-      customerMatch: 0.8,
-      situationalRelevance: searchResults.length > 0 ? 0.9 : 0.5,
-      marketAlignment: 0.85,
-      urgencyMatch: analysis.urgencyLevel === 'high' ? 0.9 : 0.6
-    };
-  }
-
-  private generateRecommendations(searchResults: any[], analysis: AIAnalysis): any {
-    const actions = [];
+    const parts = [originalQuery];
     
-    if (analysis.primaryIntent === 'quote') {
-      actions.push('calculate_premium');
-    } else {
-      actions.push('provide_info');
+    // Add company context
+    if (context.companyConfig?.businessType) {
+      parts.push(context.companyConfig.businessType);
     }
-
-    return {
-      nextBestActions: actions,
-      followUpQuestions: ['Would you like a quote?'],
-      additionalInfo: ['payment_options']
-    };
-  }
-
-  private extractPremiumCalculationInfo(documents: any[]): any {
-    return {
-      canCalculate: true,
-      requiredFields: ['vehicle_type', 'age'],
-      estimatedRange: { min: 200, max: 2000 }
-    };
-  }
-
-  private calculateLeadScore(analysis: AIAnalysis): number {
-    let score = 5;
     
-    if (analysis.leadReadiness === 'hot') score += 3;
-    else if (analysis.leadReadiness === 'warm') score += 2;
-    
-    if (analysis.primaryIntent === 'quote') score += 2;
-    if (analysis.urgencyLevel === 'high') score += 1;
-    
-    return Math.min(score, 10);
-  }
-
-  private updateConversationHistory(userId: string, message: string, analysis: AIAnalysis): void {
-    if (!this.conversationHistory.has(userId)) {
-      this.conversationHistory.set(userId, []);
+    // Add insurance type context
+    if (analysis.insuranceType && analysis.insuranceType !== 'unknown') {
+      parts.push(`${analysis.insuranceType} insurance`);
     }
-
-    const history = this.conversationHistory.get(userId)!;
-    history.push({
-      message,
-      analysis,
-      timestamp: new Date()
-    });
-
-    if (history.length > 5) {
-      history.splice(0, history.length - 5);
+    
+    // Add platform context
+    if (context.platform) {
+      parts.push(`${context.platform} inquiry`);
     }
+    
+    return parts.join(' ');
   }
 
-  private updateCustomerProfile(
-    userId: string,
-    analysis: AIAnalysis,
-    context: QueryContext | EnhancedQueryContext
+  // Update conversation history with company context
+  private updateConversationHistory(
+    userId: string, 
+    message: string, 
+    response: AIResponse,
+    companyId: string
   ): void {
-    if (!this.customerProfiles.has(userId)) {
-      this.customerProfiles.set(userId, {
-        location: 'ghana',
-        riskTolerance: 'medium',
-        previousClaims: false
-      } as CustomerProfile);
-    }
-
-    const profile = this.customerProfiles.get(userId)!;
+    const conversationKey = `${userId}_${companyId}`;
     
-    // Update profile based on analysis
-    if (analysis.insuranceType === 'auto') {
-      profile.vehicleType = 'sedan'; // Default, could be enhanced with more analysis
+    if (!this.conversationHistory.has(conversationKey)) {
+      this.conversationHistory.set(conversationKey, []);
     }
     
-    if (analysis.leadReadiness === 'hot') {
-      profile.riskTolerance = 'high';
-    } else if (analysis.leadReadiness === 'cold') {
-      profile.riskTolerance = 'low';
+    const history = this.conversationHistory.get(conversationKey)!;
+    
+    history.push({
+      timestamp: new Date().toISOString(),
+      userMessage: message,
+      botResponse: response.message,
+      confidence: response.confidence,
+      companyId: companyId,
+      metadata: {
+        leadScore: response.leadScore,
+        conversationStage: response.conversationStage,
+        providerUsed: response.providerUsed
+      }
+    });
+    
+    // Keep only last 10 messages per company conversation
+    if (history.length > 10) {
+      history.splice(0, history.length - 10);
     }
   }
 
-  // Fallback methods
+  // Helper methods
+  private estimateTokens(text: string): number {
+    return Math.ceil(text.length / 4);
+  }
+
+  private estimateCost(response: any): number {
+    const provider = this.llmManager.getActiveProvider();
+    const tokens = this.estimateTokens(response.content);
+    return provider.estimateCost(tokens, tokens);
+  }
+
+  private async createTimeoutPromise(ms: number, message: string): Promise<any> {
+    return new Promise((_, reject) => {
+      setTimeout(() => reject(new Error(message)), ms);
+    });
+  }
+
   private getDefaultAnalysis(): AIAnalysis {
     return {
-      primaryIntent: 'information',
-      insuranceType: 'general',
-      urgencyLevel: 'medium',
-      budgetSignals: [],
-      personalityIndicators: [],
-      buyingSignals: [],
-      emotionalState: 'neutral',
-      informationNeeds: [],
-      nextBestAction: 'provide_info',
-      confidence: 0.5,
-      leadReadiness: 'cold',
-      conversationStage: 'awareness'
+      intent: 'information_seeking',
+      insuranceType: 'unknown',
+      urgency: 'medium',
+      leadScore: 50,
+      extractedInfo: {},
+      nextActions: ['provide_more_information'],
+      confidence: 0.5
     };
   }
 
-  private getFallbackKnowledgeResult(): ContextualQueryResult {
-    return {
-      documents: [],
-      context: 'General insurance information available.',
-      confidence: 0.5,
-      relevanceScore: 0.5,
-      metadata: {
-        hasProductInfo: false,
-        hasObjectionHandling: false,
-        hasMarketContext: false,
-        hasPremiumCalculation: false,
-        hasRiskFactors: false,
-        hasClaimsInfo: false,
-        hasLocalRelevance: false,
-        seasonalRelevance: false
-      },
-      contextualFactors: {
-        customerMatch: 0.5,
-        situationalRelevance: 0.5,
-        marketAlignment: 0.5,
-        urgencyMatch: 0.5
-      },
-      recommendations: {
-        nextBestActions: ['provide_info'],
-        followUpQuestions: ['How can I help you with insurance?'],
-        additionalInfo: ['general_info']
-      }
-    };
-  }
-
-  private generateFallbackResponse(message: string, responseTime?: number): AIResponse {
-    return {
-      message: `I understand you need help with insurance. I can assist you with auto, health, life, or business insurance in Ghana. What specific information would you like to know?`,
-      confidence: 0.5,
-      shouldCaptureLead: false,
-      leadScore: 3,
-      conversationStage: 'awareness',
-      providerUsed: 'fallback',
-      responseTime: responseTime || 0
-    };
-  }
-
-  // Public API methods
-  async updateKnowledgeBase(newDocuments: any[]): Promise<void> {
-    if (!this.vectorStore) {
-      await this.initialize();
-    }
-
-    const vectorDocuments = newDocuments.map((doc, index) => ({
-      id: doc.id || `doc_${Date.now()}_${index}`,
-      content: doc.content,
-      metadata: doc.metadata || {}
-    }));
-
-    await this.vectorStore!.addDocuments(vectorDocuments);
+  private performFastAnalysis(message: string): AIAnalysis | null {
+    // Simple pattern matching for fallback
+    const lowerMessage = message.toLowerCase();
     
-    this.responseCache.clear();
-    this.analysisCache.clear();
+    let insuranceType = 'unknown';
+    if (lowerMessage.includes('car') || lowerMessage.includes('auto')) insuranceType = 'auto';
+    else if (lowerMessage.includes('health')) insuranceType = 'health';
+    else if (lowerMessage.includes('life')) insuranceType = 'life';
     
-    console.log(`📚 Added ${vectorDocuments.length} new documents to knowledge base`);
+    let intent = 'information_seeking';
+    if (lowerMessage.includes('quote') || lowerMessage.includes('price')) intent = 'quote_request';
+    
+    return {
+      intent: intent as AIAnalysis['intent'],
+      insuranceType: insuranceType as AIAnalysis['insuranceType'],
+      urgency: 'medium',
+      leadScore: 60,
+      extractedInfo: {},
+      nextActions: ['provide_quote_form'],
+      confidence: 0.6
+    };
   }
 
-  /**
-   * Switch to a specific LLM provider
-   */
-  async switchLLMProvider(providerName: string): Promise<void> {
-    await this.llmManager.setActiveProvider(providerName);
-    console.log(`🔄 Switched to LLM provider: ${providerName}`);
+  private determineNextStage(analysis: AIAnalysis): string {
+    if (analysis.intent === 'quote_request') return 'quote_provided';
+    if (analysis.leadScore > 80) return 'ready_to_convert';
+    return 'information_gathering';
   }
 
-  /**
-   * Get available LLM providers
-   */
-  getAvailableLLMProviders(): string[] {
-    return this.llmManager.getInitializedProviders();
+  private async calculatePremium(analysis: AIAnalysis, companyId: string): Promise<any> {
+    // Placeholder for premium calculation
+    return {
+      insuranceType: analysis.insuranceType,
+      amount: 1200,
+      currency: 'GHS',
+      validity: '30 days'
+    };
   }
 
-  /**
-   * Get current LLM provider
-   */
-  getCurrentLLMProvider(): string {
-    return this.llmManager.getActiveProvider().name;
+  private async waitForSlot(): Promise<void> {
+    return new Promise(resolve => {
+      const checkSlot = () => {
+        if (this.activeRequests < this.maxConcurrentRequests) {
+          resolve();
+        } else {
+          setTimeout(checkSlot, 100);
+        }
+      };
+      checkSlot();
+    });
   }
 
-  /**
-   * Get LLM provider health status
-   */
-  async getLLMHealthStatus(): Promise<Record<string, any>> {
-    return await this.llmManager.getHealthStatus();
-  }
-
-  /**
-   * Get cost estimates for different providers
-   */
-  getLLMCostEstimates(promptTokens: number, completionTokens: number = 100): Record<string, number> {
-    return this.llmManager.getCostEstimates(promptTokens, completionTokens);
-  }
-
-  getPerformanceAnalytics(): any {
+  // Get service statistics with company breakdown
+  getServiceStats() {
     const vectorStats = this.vectorStore ? 
       { provider: this.vectorStore.name, initialized: this.vectorStore.isInitialized } : 
       { provider: 'none', initialized: false };
@@ -734,6 +615,10 @@ Response (max 150 words):`
         activeProvider: this.llmManager.getActiveProvider().name,
         embeddingProvider: this.llmManager.getEmbeddingProvider().name
       },
+      companies: {
+        totalCompanies: this.companyManager.getActiveCompanies().length,
+        configuredCompanies: this.companyManager.getActiveCompanies().map(c => c.name)
+      },
       caching: {
         responseCache: this.responseCache.getStats(),
         analysisCache: this.analysisCache.getStats()
@@ -742,7 +627,7 @@ Response (max 150 words):`
         activeRequests: this.activeRequests,
         maxConcurrentRequests: this.maxConcurrentRequests
       },
-      mode: 'enhanced_v2_multi_llm'
+      mode: 'enhanced_v2_multi_company_multi_llm'
     };
   }
 }

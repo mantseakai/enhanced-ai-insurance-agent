@@ -9,7 +9,13 @@
     "test": "jest",
     "test:watch": "jest --watch",
     "lint": "eslint src/**/*.ts",
-    "lint:fix": "eslint src/**/*.ts --fix"
+    "lint:fix": "eslint src/**/*.ts --fix",
+    "docker:up": "docker-compose up -d",
+    "docker:down": "docker-compose down",
+    "docker:logs": "docker-compose logs -f",
+    "redis:start": "docker-compose up -d redis",
+    "cache:flush": "redis-cli FLUSHALL",
+    "dev:with-redis": "docker-compose up -d redis && npm run dev"
   },
   "keywords": [],
   "author": "",
@@ -18,6 +24,7 @@
   "dependencies": {
     "@pinecone-database/pinecone": "^2.2.2",
     "@prisma/client": "^6.14.0",
+    "@types/ioredis": "^4.28.10",
     "@types/node-fetch": "^2.6.13",
     "axios": "^1.11.0",
     "bcryptjs": "^3.0.2",
@@ -47,12 +54,14 @@
     "@types/lodash": "^4.17.20",
     "@types/morgan": "^1.9.10",
     "@types/node": "^24.2.1",
+    "@types/supertest": "^6.0.3",
     "@types/uuid": "^9.0.8",
     "@typescript-eslint/eslint-plugin": "^7.18.0",
     "@typescript-eslint/parser": "^7.18.0",
     "eslint": "^8.57.1",
     "jest": "^29.7.0",
     "nodemon": "^3.1.10",
+    "supertest": "^7.1.4",
     "ts-jest": "^29.4.4",
     "ts-node": "^10.9.2",
     "typescript": "^5.9.2"

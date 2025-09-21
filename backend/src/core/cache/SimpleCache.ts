@@ -1,4 +1,5 @@
 // File: backend/src/core/cache/SimpleCache.ts
+import { CacheHealth } from '../../types/CacheTypes';
 
 interface CacheItem<T> {
   data: T;
@@ -7,6 +8,7 @@ interface CacheItem<T> {
 }
 
 export class SimpleCache {
+  
   private static instance: SimpleCache;
   private cache: Map<string, CacheItem<any>> = new Map();
   private maxSize: number;
@@ -20,6 +22,29 @@ export class SimpleCache {
     setInterval(() => this.cleanup(), 300000);
   }
 
+
+  // Add these methods to the SimpleCache class
+async initialize(): Promise<void> {
+  // No-op for in-memory cache
+  return;
+}
+
+async exists(key: string): Promise<boolean> {
+  return this.has(key);
+}
+
+async getHealth(): Promise<CacheHealth> {
+  // In-memory cache is always healthy unless there's a critical memory issue
+  return {
+    status: 'healthy',
+    connected: true,
+    latency: 0,
+  };
+}
+
+async disconnect(): Promise<void> {
+  this.clear();
+}
   static getInstance(maxSize?: number, defaultTTL?: number): SimpleCache {
     if (!SimpleCache.instance) {
       SimpleCache.instance = new SimpleCache(maxSize, defaultTTL);
@@ -28,65 +53,71 @@ export class SimpleCache {
   }
 
   /**
-   * Set cache item with TTL
-   */
-  set<T>(key: string, data: T, ttl?: number): void {
-    // If cache is full, remove oldest items
-    if (this.cache.size >= this.maxSize) {
-      const oldestKey = this.cache.keys().next().value;
-      if (oldestKey) {
-        this.cache.delete(oldestKey);
-      }
+ * Set cache item with TTL
+ */
+async set<T>(key: string, data: T, ttl?: number): Promise<boolean> {
+  // If cache is full, remove oldest items
+  if (this.cache.size >= this.maxSize) {
+    const oldestKey = this.cache.keys().next().value;
+    if (oldestKey) {
+      this.cache.delete(oldestKey);
     }
-
-    const item: CacheItem<T> = {
-      data,
-      timestamp: Date.now(),
-      ttl: ttl || this.defaultTTL
-    };
-
-    this.cache.set(key, item);
   }
+
+  const item: CacheItem<T> = {
+    data,
+    timestamp: Date.now(),
+    ttl: ttl || this.defaultTTL
+  };
+
+  this.cache.set(key, item);
+  return Promise.resolve(true);
+}
 
   /**
    * Get cache item if not expired
    */
-  get<T>(key: string): T | null {
+ /**
+ * Get cache item if not expired
+ */
+async get<T>(key: string): Promise<T | null> {
     const item = this.cache.get(key);
     
     if (!item) {
-      return null;
+      return Promise.resolve(null);
     }
 
     // Check if expired
     if (Date.now() - item.timestamp > item.ttl) {
       this.cache.delete(key);
-      return null;
+      return Promise.resolve(null);
     }
 
-    return item.data;
-  }
+    return Promise.resolve(item.data);
+}
 
   /**
-   * Check if key exists and is not expired
-   */
-  has(key: string): boolean {
-    return this.get(key) !== null;
-  }
+ * Check if key exists and is not expired
+ */
+async has(key: string): Promise<boolean> {
+  return Promise.resolve(this.get(key) !== null);
+}
 
-  /**
-   * Delete cache item
-   */
-  delete(key: string): boolean {
-    return this.cache.delete(key);
-  }
+ /**
+ * Delete cache item
+ */
+async delete(key: string): Promise<boolean> {
+  return Promise.resolve(this.cache.delete(key));
+}
 
-  /**
-   * Clear all cache
-   */
-  clear(): void {
-    this.cache.clear();
-  }
+ /**
+ * Clear all cache
+ */
+async clear(): Promise<number> {
+  const size = this.cache.size;
+  this.cache.clear();
+  return Promise.resolve(size);
+}
 
   /**
    * Get cache statistics

@@ -158,9 +158,9 @@ export class PineconeProvider implements VectorStoreProvider {
           if (!embedding) {
             // Check cache first
             const cacheKey = `embedding:${doc.content.substring(0, 100)}`;
-            const cachedEmbedding = this.cache.get<number[]>(cacheKey);
+            const cachedEmbedding = await this.cache.get<number[]>(cacheKey);
             
-            if (cachedEmbedding) {
+            if (cachedEmbedding !== null) {
               embedding = cachedEmbedding;
             } else {
               embedding = await this.generateEmbedding(doc.content);
@@ -246,10 +246,11 @@ export class PineconeProvider implements VectorStoreProvider {
 
     // Generate cache key
     const cacheKey = `search:${queryEmbedding.slice(0, 5).join(',')}:${topK}:${JSON.stringify(filter)}`;
-    const cached = this.cache.get<VectorSearchResult[]>(cacheKey);
-    if (cached) {
+    const cached = await this.cache.get<VectorSearchResult[]>(cacheKey);
+    if (cached !== null) {
       return cached;
     }
+    
 
     const queryRequest: any = {
       vector: queryEmbedding,
@@ -291,8 +292,8 @@ export class PineconeProvider implements VectorStoreProvider {
   ): Promise<VectorSearchResult[]> {
     // Check cache first
     const cacheKey = `text_search:${query}:${topK}:${JSON.stringify(filter)}`;
-    const cached = this.cache.get<VectorSearchResult[]>(cacheKey);
-    if (cached) {
+    const cached = await this.cache.get<VectorSearchResult[]>(cacheKey);
+    if (cached !== null) {
       return cached;
     }
 

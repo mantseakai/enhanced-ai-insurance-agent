@@ -2,7 +2,9 @@
 
 import { VectorStoreProvider, VectorStoreConfig } from '../interfaces/VectorStoreProvider';
 import { PineconeProvider } from '../providers/PineconeProvider';
+import dotenv from 'dotenv';
 
+dotenv.config();
 export class VectorStoreManager {
   private static instance: VectorStoreManager;
   private providers: Map<string, VectorStoreProvider> = new Map();

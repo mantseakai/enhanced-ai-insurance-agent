@@ -12,7 +12,7 @@ export class LocalLlamaProvider implements LLMProvider {
   public name = 'local_llama';
   public isInitialized = false;
   
-  private baseURL: string = 'http://localhost:11434';
+  private baseURL: string = 'http://127.0.01:11434';
   private config: LLMConfig | null = null;
   private healthMetrics = {
     errorCount: 0,
@@ -26,7 +26,7 @@ export class LocalLlamaProvider implements LLMProvider {
       console.log('🔧 Initializing Local Llama provider...');
       
       this.config = config;
-      this.baseURL = config.baseURL || process.env.LOCAL_LLM_ENDPOINT || 'http://localhost:11434';
+      this.baseURL = config.baseURL || process.env.LOCAL_LLM_ENDPOINT || 'http://127.0.0.1:11434';
 
       // Test connection to Ollama
       await this.testConnection();

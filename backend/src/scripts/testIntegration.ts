@@ -4,6 +4,7 @@ import dotenv from 'dotenv';
 import path from 'path';
 import { AIService } from '../services/AIService';
 import { VectorStoreManager } from '../core/vector/managers/VectorStoreManager';
+import { platform } from 'os';
 
 // Load environment variables
 dotenv.config({ path: path.join(__dirname, '../../.env') });
@@ -16,7 +17,7 @@ class IntegrationTester {
   private vectorManager: VectorStoreManager;
 
   constructor() {
-    this.aiService = new AIService();
+    this.aiService =  new AIService();
     this.vectorManager = VectorStoreManager.getInstance();
   }
 
@@ -84,19 +85,19 @@ class IntegrationTester {
       {
         message: "I need auto insurance for my car in Accra",
         userId: "test_user_1",
-        context: { leadSource: 'web_chat', productType: 'auto' }
+        context: { platform: 'web_chat', insuranceType: 'auto' }
       },
       {
         message: "How much does health insurance cost?",
         userId: "test_user_2", 
-        context: { leadSource: 'whatsapp', budget: 'medium' }
+        context: { platform: 'whatsapp', urgency: 'medium' }
       },
       {
         message: "I want to make a claim",
         userId: "test_user_3",
-        context: { leadSource: 'whatsapp', stage: 'existing_customer' }
+        context: { platform: 'whatsapp', conversationStage: 'information_gathering' }
       }
-    ];
+    ] as any;
 
     for (const test of testMessages) {
       console.log(`   🔍 Testing: "${test.message}"`);
@@ -148,7 +149,7 @@ class IntegrationTester {
         step.message,
         whatsappUser,
         { 
-          leadSource: 'whatsapp'
+          platform: 'whatsapp'
         }
       );
       
@@ -179,7 +180,7 @@ class IntegrationTester {
     const aiResponse = await this.aiService.processMessage(
       testQuery,
       "performance_test_user",
-      { leadSource: 'web_chat' }
+      { platform: 'webchat' }
     );
     const aiTime = Date.now() - aiStart;
     

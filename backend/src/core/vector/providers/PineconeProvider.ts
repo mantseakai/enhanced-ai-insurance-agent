@@ -236,54 +236,100 @@ export class PineconeProvider implements VectorStoreProvider {
   }
 
   async similaritySearch(
-    queryEmbedding: number[], 
-    topK: number = 3, // Reduced default for speed
-    filter?: Record<string, any>
-  ): Promise<VectorSearchResult[]> {
-    if (!this.isInitialized || !this.index) {
-      throw new Error('Pinecone provider not initialized');
-    }
+  queryEmbedding: number[], 
+  topK: number = 3, 
+  filter?: Record<string, any>
+): Promise<VectorSearchResult[]> {
+  if (!this.isInitialized || !this.index) {
+    throw new Error('Pinecone provider not initialized');
+  }
 
-    // Generate cache key
-    const cacheKey = `search:${queryEmbedding.slice(0, 5).join(',')}:${topK}:${JSON.stringify(filter)}`;
-    const cached = await this.cache.get<VectorSearchResult[]>(cacheKey);
-    if (cached !== null) {
-      return cached;
-    }
+  // Generate cache key
+  const cacheKey = `search:${queryEmbedding.slice(0, 5).join(',')}:${topK}:${JSON.stringify(filter)}`;
+  const cached = await this.cache.get<VectorSearchResult[]>(cacheKey);
+  if (cached !== null) {
+    return cached;
+  }
+
+  const queryRequest: any = {
+    vector: queryEmbedding,
+    topK: Math.min(topK, 10),
+    includeMetadata: true,
+    includeValues: false
+  };
+
+  // FIX: Convert simple filter to Pinecone format
+  if (filter && Object.keys(filter).length > 0) {
+    const pineconeFilter: any = {};
     
-
-    const queryRequest: any = {
-      vector: queryEmbedding,
-      topK: Math.min(topK, 10), // Limit max results for performance
-      includeMetadata: true,
-      includeValues: false
-    };
-
-    if (filter) {
-      queryRequest.filter = filter;
-    }
-
-    try {
-      const queryResponse = await this.index.query(queryRequest);
-
-      const results = queryResponse.matches.map((match: any) => ({
-        document: {
-          id: match.id,
-          content: match.metadata.content || '',
-          metadata: match.metadata
-        },
-        score: match.score || 0
-      }));
-
-      // Cache the results
-      this.cache.set(cacheKey, results, 300000); // 5-minute cache
-
-      return results;
-    } catch (error) {
-      console.error('❌ Error in similarity search:', error);
-      return [];
+    Object.keys(filter).forEach(key => {
+      if (filter[key] !== undefined && filter[key] !== null) {
+        // Convert to Pinecone filter format
+        pineconeFilter[key] = { "$eq": filter[key] };
+      }
+    });
+    
+    if (Object.keys(pineconeFilter).length > 0) {
+      queryRequest.filter = pineconeFilter;
+      console.log('🔍 Pinecone filter applied:', JSON.stringify(pineconeFilter));
     }
   }
+
+  try {
+    const queryResponse = await this.index.query(queryRequest);
+
+    const results = queryResponse.matches.map((match: any) => ({
+      document: {
+        id: match.id,
+        content: match.metadata.content || '',
+        metadata: match.metadata
+      },
+      score: match.score || 0
+    }));
+
+    // Cache the results
+    this.cache.set(cacheKey, results, 300000);
+    console.log(`✅ Pinecone search: ${results.length} results found`);
+
+    return results;
+    
+  } catch (error) {
+    console.error('❌ Error in similarity search:', error);
+    
+    // FIX: Fallback to search without filter if filter fails
+    if (filter && Object.keys(filter).length > 0) {
+      console.log('🔄 Retrying search without company filter...');
+      try {
+        const fallbackRequest = {
+          vector: queryEmbedding,
+          topK: Math.min(topK, 10),
+          includeMetadata: true,
+          includeValues: false
+        };
+
+        const fallbackResponse = await this.index.query(fallbackRequest);
+        
+        const fallbackResults = fallbackResponse.matches.map((match: any) => ({
+          document: {
+            id: match.id,
+            content: match.metadata.content || '',
+            metadata: match.metadata
+          },
+          score: match.score || 0
+        }));
+
+        console.log(`✅ Fallback search: ${fallbackResults.length} results found`);
+        return fallbackResults;
+        
+      } catch (fallbackError) {
+        console.error('❌ Fallback search also failed:', fallbackError);
+        return [];
+      }
+    }
+    
+    return [];
+  }
+}
 
   async searchByText(
     query: string, 

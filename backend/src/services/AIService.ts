@@ -41,6 +41,8 @@ export interface AIResponse {
 }
 
 export class AIService {
+  private static instance: AIService; // NEW: Singleton instance property
+
   private vectorStore: VectorStoreProvider | null = null;
   private vectorManager: VectorStoreManager;
   private llmManager: LLMManager;
@@ -58,7 +60,7 @@ export class AIService {
   private activeRequests: number = 0;
   private maxConcurrentRequests: number = 5;
 
-  constructor() {
+   constructor() {
     // Get manager instances
     this.vectorManager = VectorStoreManager.getInstance();
     this.llmManager = LLMManager.getInstance();
@@ -67,6 +69,13 @@ export class AIService {
     // Initialize caches
     this.responseCache = SimpleCache.getInstance(200, 300000); // 5 min cache
     this.analysisCache = SimpleCache.getInstance(100, 600000); // 10 min cache
+  }
+
+  public static getInstance(): AIService {
+    if (!AIService.instance) {
+      AIService.instance = new AIService();
+    }
+    return AIService.instance;
   }
 
   async initialize(): Promise<void> {
@@ -202,260 +211,293 @@ export class AIService {
 
   // Company-specific LLM provider selection
   private async selectOptimalProviderForCompany(
-    message: string, 
-    context: UnifiedQueryContext, 
-    companyConfig: CompanyConfig
-  ): Promise<void> {
-    try {
-      // Use company's preferred LLM provider if specified
-      if (companyConfig.preferredLLMProvider) {
-        const provider = this.llmManager.getProvider(companyConfig.preferredLLMProvider);
-        if (provider) {
-          await this.llmManager.setActiveProvider(companyConfig.preferredLLMProvider);
-          console.log(`🎯 Using company preferred LLM: ${companyConfig.preferredLLMProvider}`);
-          return;
-        }
+  message: string, 
+  context: UnifiedQueryContext, 
+  companyConfig: CompanyConfig
+): Promise<void> {
+  try {
+    // FIX: Prefer reliable providers over Local Llama
+    let preferredProvider = 'openai'; // Default to OpenAI instead of Local Llama
+
+    // Use company's preferred LLM provider if specified
+    if (companyConfig.preferredLLMProvider) {
+      const provider = this.llmManager.getProvider(companyConfig.preferredLLMProvider);
+      if (provider) {
+        preferredProvider = companyConfig.preferredLLMProvider;
+        console.log(`🎯 Using company preferred LLM: ${preferredProvider}`);
       }
-
-      // Fallback to intelligent selection based on company's priorities
-      const criteria = {
-        prioritize: companyConfig.llmPriority || 'cost' as 'cost' | 'speed' | 'quality',
-        promptTokens: this.estimateTokens(message),
-        completionTokens: 500
-      };
-
-      await this.llmManager.autoSelectProvider(criteria);
+    } else {
+      // Intelligent selection based on company's priorities
+      const priority = companyConfig.llmPriority || 'quality';
       
-    } catch (error) {
-      console.warn('⚠️ Provider selection failed, using default:', error);
-      // Fallback to default provider
+      switch (priority) {
+        case 'speed':
+          preferredProvider = 'claude'; // OpenAI is fast and reliable
+          break;
+        case 'cost':
+          preferredProvider = 'claude'; // Claude is cost-effective
+          break;
+        case 'quality':
+        default:
+          preferredProvider = 'claude'; // OpenAI for quality
+          break;
+      }
+    }
+
+    // FIX: Verify the provider is available before setting it
+    const availableProviders = this.llmManager.getInitializedProviders();
+    if (!availableProviders.includes(preferredProvider)) {
+      console.warn(`⚠️ Preferred provider ${preferredProvider} not available, using openai`);
+      preferredProvider = 'openai';
+    }
+
+    await this.llmManager.setActiveProvider(preferredProvider);
+    console.log(`🎯 Active LLM provider set to: ${preferredProvider}`);
+    
+  } catch (error) {
+    console.warn('⚠️ Provider selection failed, using openai:', error);
+    // Fallback to OpenAI (most reliable)
+    try {
+      await this.llmManager.setActiveProvider('openai');
+    } catch (fallbackError) {
+      console.error('❌ Even OpenAI fallback failed:', fallbackError);
     }
   }
+}
 
   // Company-specific intent analysis
   private async analyzeUserIntentWithCompany(
-    message: string, 
-    context: UnifiedQueryContext
-  ): Promise<AIAnalysis> {
-    const cacheKey = SimpleCache.generateKey('analysis', message, { companyId: context.companyId });
-    const cached = await this.analysisCache.get<AIAnalysis>(cacheKey);
-    if (cached !== null) return cached;
+  message: string, 
+  context: UnifiedQueryContext
+): Promise<AIAnalysis> {
+  const cacheKey = SimpleCache.generateKey('analysis', message, { companyId: context.companyId });
+  const cached = await this.analysisCache.get<AIAnalysis>(cacheKey);
+  if (cached !== null) return cached;
 
-    try {
-      const llmProvider = this.llmManager.getActiveProvider();
+  try {
+    const llmProvider = this.llmManager.getActiveProvider();
+    
+    // Enhanced analysis prompt with company context
+    const analysisPrompt = `
+      Analyze this insurance customer message for ${context.companyConfig?.name || 'insurance company'}:
       
-      // Enhanced analysis prompt with company context
-      const analysisPrompt = `
-        Analyze this insurance customer message for ${context.companyConfig?.name || 'insurance company'}:
-        
-        Message: "${message}"
-        Company Context: ${context.companyConfig?.businessType || 'general insurance'}
-        Previous Stage: ${context.conversationStage || 'initial'}
-        Platform: ${context.platform || 'unknown'}
-        Customer Type: ${context.customerType || 'individual'}
-        
-        Return JSON with:
-        {
-          "intent": "quote_request|information_seeking|support|comparison|complaint",
-          "insuranceType": "auto|health|life|business|property|travel",
-          "urgency": "low|medium|high",
-          "leadScore": 0-100,
-          "extractedInfo": {
-            "age": null,
-            "location": null,
-            "specificNeeds": []
-          },
-          "nextActions": [],
-          "confidence": 0-1
-        }
-      `;
-
-      const response = await Promise.race([
-        llmProvider.generateCompletion([
-          { role: 'user', content: analysisPrompt }
-        ], {
-          maxTokens: 200,
-          temperature: 0.1
-        }),
-        this.createTimeoutPromise(4000, 'Analysis timed out')
-      ]);
-
-      // Safe JSON parsing
-      let analysis: AIAnalysis;
-      try {
-        const cleanContent = response.content.replace(/```json\n?|\n?```/g, '').trim();
-        const parsedAnalysis = JSON.parse(cleanContent);
-        analysis = { ...this.getDefaultAnalysis(), ...parsedAnalysis };
-      } catch (parseError) {
-        console.warn('JSON parse failed, using pattern analysis');
-        analysis = this.performFastAnalysis(message) || this.getDefaultAnalysis();
+      Message: "${message}"
+      Company Context: ${context.companyConfig?.businessType || 'general insurance'}
+      Previous Stage: ${context.conversationStage || 'initial'}
+      Platform: ${context.platform || 'unknown'}
+      Customer Type: ${context.customerType || 'individual'}
+      
+      Return JSON with:
+      {
+        "intent": "quote_request|information_seeking|support|comparison|complaint",
+        "insuranceType": "auto|health|life|business|property|travel",
+        "urgency": "low|medium|high",
+        "leadScore": 0-100,
+        "extractedInfo": {
+          "age": null,
+          "location": null,
+          "specificNeeds": []
+        },
+        "nextActions": [],
+        "confidence": 0-1
       }
-      
-      // Cache the analysis
-      this.analysisCache.set(cacheKey, analysis, 600000);
-      
-      return analysis;
+    `;
 
-    } catch (error) {
-      console.warn('❌ Analysis failed, using pattern matching:', (error as Error).message);
-      return this.performFastAnalysis(message) || this.getDefaultAnalysis();
+    // FIX: Reduce timeout from 4000ms to 2000ms and add better error handling
+    const response = await Promise.race([
+      llmProvider.generateCompletion([
+        { role: 'user', content: analysisPrompt }
+      ], {
+        maxTokens: 200,
+        temperature: 0.1
+      }),
+      this.createTimeoutPromise(2000, 'Analysis timed out') // Reduced timeout
+    ]);
+
+    // Safe JSON parsing
+    let analysis: AIAnalysis;
+    try {
+      const cleanContent = response.content.replace(/```json\n?|\n?```/g, '').trim();
+      const parsedAnalysis = JSON.parse(cleanContent);
+      analysis = { ...this.getDefaultAnalysis(), ...parsedAnalysis };
+    } catch (parseError) {
+      console.warn('JSON parse failed, using pattern analysis');
+      analysis = this.performFastAnalysis(message) || this.getDefaultAnalysis();
     }
+    
+    // Cache the analysis
+    this.analysisCache.set(cacheKey, analysis, 600000);
+    
+    return analysis;
+
+  } catch (error) {
+    console.warn('❌ Analysis failed, using pattern matching:', (error as Error).message);
+    return this.performFastAnalysis(message) || this.getDefaultAnalysis();
   }
+}
 
   // Company-specific knowledge base querying
   private async queryCompanyKnowledgeBase(
-    query: string,
-    context: UnifiedQueryContext,
-    analysis: AIAnalysis
-  ): Promise<ContextualQueryResult> {
-    try {
-      if (!this.vectorStore) {
-        throw new Error('Vector store not initialized');
-      }
-
-      // Build enhanced query with company context
-      const enhancedQuery = this.buildCompanyEnhancedQuery(query, analysis, context);
-
-      // Search with company filtering
-      const searchResults = await this.vectorStore.searchByText(enhancedQuery, 3, {
-        filter: {
-          companyId: context.companyId
-        }
-      });
-
-      // Convert to ContextualQueryResult format
-      const documents = searchResults.map(result => ({
-        id: result.document.id,
-        content: result.document.content.substring(0, 1200),
-        metadata: {
-          type: result.document.metadata?.type || 'insurance_document',
-          source: result.document.metadata?.source || 'knowledge_base',
-          companyId: context.companyId,
-          relevanceScore: result.score,
-          timestamp: new Date().toISOString()
-        }
-      }));
-
-      const avgScore = documents.length > 0 
-        ? documents.reduce((sum, doc) => sum + (doc.metadata.relevanceScore || 0), 0) / documents.length 
-        : 0;
-
-      return {
-        documents,
-        totalResults: searchResults.length,
-        averageScore: avgScore,
-        searchQuery: enhancedQuery,
-        processingTime: Date.now()
-      };
-
-    } catch (error) {
-      console.error('❌ Knowledge base query failed:', error);
-      return {
-        documents: [],
-        totalResults: 0,
-        averageScore: 0,
-        searchQuery: query,
-        processingTime: Date.now()
-      };
+  query: string,
+  context: UnifiedQueryContext,
+  analysis: AIAnalysis
+): Promise<ContextualQueryResult> {
+  try {
+    if (!this.vectorStore) {
+      throw new Error('Vector store not initialized');
     }
+
+    // Build enhanced query with company context
+    const enhancedQuery = this.buildCompanyEnhancedQuery(query, analysis, context);
+
+    // FIX: Use the correct method that exists in your PineconeProvider
+    let searchResults;
+    try {
+      // Use searchByText method instead of manual embedding generation
+      searchResults = await this.vectorStore.searchByText(enhancedQuery, 3, {
+        companyId: context.companyId
+      });
+    } catch (searchError) {
+      console.log('❌ Company-specific search failed, trying general search:', (searchError as Error).message);
+      
+      // Fallback to general search without company filter
+      searchResults = await this.vectorStore.searchByText(enhancedQuery, 3);
+    }
+
+    // Convert to ContextualQueryResult format
+    const documents = searchResults.map(result => ({
+      id: result.document.id,
+      content: result.document.content.substring(0, 1200),
+      metadata: {
+        type: result.document.metadata?.type || 'insurance_document',
+        source: result.document.metadata?.source || 'knowledge_base',
+        companyId: context.companyId,
+        relevanceScore: result.score,
+        timestamp: new Date().toISOString()
+      }
+    }));
+
+    const avgScore = documents.length > 0 
+      ? documents.reduce((sum, doc) => sum + (doc.metadata.relevanceScore || 0), 0) / documents.length 
+      : 0;
+
+    return {
+      documents,
+      totalResults: searchResults.length,
+      averageScore: avgScore,
+      searchQuery: enhancedQuery,
+      processingTime: Date.now()
+    };
+
+  } catch (error) {
+    console.error('❌ Knowledge base query failed:', error);
+    return {
+      documents: [],
+      totalResults: 0,
+      averageScore: 0,
+      searchQuery: query,
+      processingTime: Date.now()
+    };
   }
+}
 
   // Company-specific response generation
   private async generateCompanyResponse(
-    message: string,
-    context: UnifiedQueryContext,
-    analysis: AIAnalysis,
-    knowledgeResult: ContextualQueryResult,
-    companyConfig: CompanyConfig
-  ): Promise<AIResponse> {
-    try {
-      const llmProvider = this.llmManager.getActiveProvider();
-      const startTime = Date.now();
+  message: string,
+  context: UnifiedQueryContext,
+  analysis: AIAnalysis,
+  knowledgeResult: ContextualQueryResult,
+  companyConfig: CompanyConfig
+): Promise<AIResponse> {
+  try {
+    const llmProvider = this.llmManager.getActiveProvider();
+    const startTime = Date.now();
 
-      // Build company-specific context
-      const contextDocs = knowledgeResult.documents
-        .map(doc => `[${doc.metadata.type}] ${doc.content}`)
-        .join('\n\n');
+    // Build company-specific context
+    const contextDocs = knowledgeResult.documents
+      .map(doc => `[${doc.metadata.type}] ${doc.content}`)
+      .join('\n\n');
 
-      // Company-specific system prompt
-      const systemPrompt = `You are an AI insurance assistant for ${companyConfig.name}.
-        
-        Company Information:
-        - Name: ${companyConfig.name}
-        - Business Type: ${companyConfig.businessType || 'insurance'}
-        - Brand Voice: ${companyConfig.branding?.brandVoice || 'professional and friendly'}
-        - Contact Info: ${companyConfig.contactInfo?.phone || 'Contact us for more details'}
-        
-        Customer Context:
-        - Intent: ${analysis.intent}
-        - Insurance Type: ${analysis.insuranceType}
-        - Lead Score: ${analysis.leadScore}
-        - Platform: ${context.platform}
-        
-        Available Knowledge:
-        ${contextDocs}
-        
-        Instructions:
-        1. Respond in ${companyConfig.branding?.brandVoice || 'professional'} tone
-        2. Include company-specific contact information when relevant
-        3. Mention ${companyConfig.name} naturally in the response
-        4. Focus on ${analysis.insuranceType} insurance if identified
-        5. Keep responses concise and actionable
-        6. Use Ghana-specific language and context
-        `;
-
-      const userPrompt = `Customer message: "${message}"
-        
-        Generate a helpful response that addresses their needs while representing ${companyConfig.name} professionally.`;
-
-      const response = await Promise.race([
-        llmProvider.generateCompletion([
-          { role: 'system', content: systemPrompt },
-          { role: 'user', content: userPrompt }
-        ], {
-          maxTokens: 400,
-          temperature: 0.7
-        }),
-        this.createTimeoutPromise(8000, 'Response generation timed out')
-      ]);
-
-      // Calculate premium quote if relevant
-      let premiumQuote = null;
-      if (analysis.intent === 'quote_request' && analysis.extractedInfo) {
-        try {
-          premiumQuote = await this.calculatePremium(analysis, context.companyId || 'default');
-        } catch (error) {
-          console.warn('Premium calculation failed:', error);
-        }
-      }
-
-      return {
-        message: response.content,
-        confidence: analysis.confidence || 0.8,
-        shouldCaptureLead: analysis.leadScore > 60,
-        leadScore: analysis.leadScore,
-        premiumQuote,
-        nextActions: analysis.nextActions || [],
-        conversationStage: this.determineNextStage(analysis),
-        providerUsed: llmProvider.name,
-        cost: this.estimateCost(response),
-        companyId: context.companyId
-      };
-
-    } catch (error) {
-      console.error('❌ Response generation failed:', error);
+    // Company-specific system prompt
+    const systemPrompt = `You are an AI insurance assistant for ${companyConfig.name}.
       
-      // Fallback company response
-      return {
-        message: `Thank you for contacting ${companyConfig.name}. We're experiencing technical difficulties but our team will assist you shortly. Please call ${companyConfig.contactInfo?.phone || 'our support line'} for immediate assistance.`,
-        confidence: 0.3,
-        shouldCaptureLead: true,
-        leadScore: 50,
-        conversationStage: 'support_needed',
-        companyId: context.companyId
-      };
+      Company Information:
+      - Name: ${companyConfig.name}
+      - Business Type: ${companyConfig.businessType || 'insurance'}
+      - Brand Voice: ${companyConfig.branding?.brandVoice || 'professional and friendly'}
+      - Contact Info: ${companyConfig.contactInfo?.phone || 'Contact us for more details'}
+      
+      Customer Context:
+      - Intent: ${analysis.intent}
+      - Insurance Type: ${analysis.insuranceType}
+      - Lead Score: ${analysis.leadScore}
+      - Platform: ${context.platform}
+      
+      Available Knowledge:
+      ${contextDocs}
+      
+      Instructions:
+      1. Respond in ${companyConfig.branding?.brandVoice || 'professional'} tone
+      2. Include company-specific contact information when relevant
+      3. Mention ${companyConfig.name} naturally in the response
+      4. Focus on ${analysis.insuranceType} insurance if identified
+      5. Keep responses concise and actionable
+      6. Use Ghana-specific language and context
+      `;
+
+    const userPrompt = `Customer message: "${message}"
+      
+      Generate a helpful response that addresses their needs while representing ${companyConfig.name} professionally.`;
+
+    // FIX: Reduce timeout from 8000ms to 5000ms
+    const response = await Promise.race([
+      llmProvider.generateCompletion([
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: userPrompt }
+      ], {
+        maxTokens: 400,
+        temperature: 0.7
+      }),
+      this.createTimeoutPromise(5000, 'Response generation timed out') // Reduced timeout
+    ]);
+
+    // Calculate premium quote if relevant
+    let premiumQuote = null;
+    if (analysis.intent === 'quote_request' && analysis.extractedInfo) {
+      try {
+        premiumQuote = await this.calculatePremium(analysis, context.companyId || 'default');
+      } catch (error) {
+        console.warn('Premium calculation failed:', error);
+      }
     }
+
+    return {
+      message: response.content,
+      confidence: analysis.confidence || 0.8,
+      shouldCaptureLead: analysis.leadScore > 60,
+      leadScore: analysis.leadScore,
+      premiumQuote,
+      nextActions: analysis.nextActions || [],
+      conversationStage: this.determineNextStage(analysis),
+      providerUsed: llmProvider.name,
+      cost: this.estimateCost(response),
+      companyId: context.companyId
+    };
+
+  } catch (error) {
+    console.error('❌ Response generation failed:', error);
+    
+    // Fallback company response
+    return {
+      message: `Thank you for contacting ${companyConfig.name}. We're experiencing technical difficulties but our team will assist you shortly. Please call ${companyConfig.contactInfo?.phone || 'our support line'} for immediate assistance.`,
+      confidence: 0.3,
+      shouldCaptureLead: true,
+      leadScore: 50,
+      conversationStage: 'support_needed',
+      companyId: context.companyId
+    };
   }
+}
 
   // Company-enhanced query building
   private buildCompanyEnhancedQuery(
@@ -628,6 +670,34 @@ export class AIService {
         maxConcurrentRequests: this.maxConcurrentRequests
       },
       mode: 'enhanced_v2_multi_company_multi_llm'
+    };
+  }
+
+  getPerformanceAnalytics(): any {
+    const vectorStats = this.vectorStore ? 
+      { provider: this.vectorStore.name, initialized: this.vectorStore.isInitialized } : 
+      { provider: 'none', initialized: false };
+
+    return {
+      conversations: {
+        activeConversations: this.conversationHistory.size,
+        customerProfiles: this.customerProfiles.size
+      },
+      vectorStore: vectorStats,
+      llm: {
+        availableProviders: this.llmManager.getInitializedProviders(),
+        activeProvider: this.llmManager.getActiveProvider().name,
+        embeddingProvider: this.llmManager.getEmbeddingProvider().name
+      },
+      caching: {
+        responseCache: this.responseCache.getStats(),
+        analysisCache: this.analysisCache.getStats()
+      },
+      concurrency: {
+        activeRequests: this.activeRequests,
+        maxConcurrentRequests: this.maxConcurrentRequests
+      },
+      mode: 'enhanced_v2_multi_llm'
     };
   }
 }

@@ -314,7 +314,7 @@ export class LLMManager {
     if (process.env.LOCAL_LLM_ENDPOINT || process.env.OLLAMA_ENABLED === 'true') {
       this.configs.set('local_llama', {
         provider: 'local_llama',
-        baseURL: process.env.LOCAL_LLM_ENDPOINT || 'http://localhost:11434',
+        baseURL: process.env.LOCAL_LLM_ENDPOINT || 'http://127.0.0.1:11434',
         model: process.env.LOCAL_LLM_MODEL || 'llama2',
         maxTokens: parseInt(process.env.LOCAL_LLM_MAX_TOKENS || '500'),
         temperature: parseFloat(process.env.LOCAL_LLM_TEMPERATURE || '0.7'),

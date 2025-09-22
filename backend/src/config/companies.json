@@ -1,6 +1,6 @@
 {
   "version": "1.0",
-  "lastUpdated": "2025-09-21T22:17:47.122Z",
+  "lastUpdated": "2025-09-22T00:00:04.436Z",
   "companies": [
     {
       "id": "default",
@@ -154,7 +154,7 @@
       },
       "status": "active",
       "createdAt": "2024-09-21T00:00:00.000Z",
-      "updatedAt": "2025-09-21T22:17:47.097Z"
+      "updatedAt": "2025-09-21T23:59:38.431Z"
     },
     {
       "id": "test_company_001",
@@ -256,7 +256,7 @@
       },
       "status": "active",
       "createdAt": "2025-09-21T21:41:47.841Z",
-      "updatedAt": "2025-09-21T22:17:47.097Z"
+      "updatedAt": "2025-09-21T23:59:38.431Z"
     },
     {
       "id": "api_test_company",
@@ -265,6 +265,7 @@
       "businessType": "auto_insurance",
       "branding": {
         "primaryColor": "#6c5ce7",
+        "secondaryColor": "#6c757d",
         "brandVoice": "professional"
       },
       "llmPriority": "cost",
@@ -282,7 +283,8 @@
       "contactInfo": {
         "phone": "+233-555-999-888",
         "email": "api-test@testapi.com",
-        "address": "API Test Address, Accra"
+        "address": "API Test Address, Accra",
+        "supportHours": "Mon-Fri 8AM-6PM GMT"
       },
       "businessSettings": {
         "currency": "GHS",
@@ -356,7 +358,7 @@
       },
       "status": "active",
       "createdAt": "2025-09-21T22:17:47.113Z",
-      "updatedAt": "2025-09-21T22:17:47.122Z"
+      "updatedAt": "2025-09-21T23:59:38.432Z"
     }
   ]
 }

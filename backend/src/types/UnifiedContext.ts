@@ -54,6 +54,8 @@ export interface UnifiedQueryContext {
   campaignId?: string;
   referralSource?: string;
   trackingData?: Record<string, any>;
+
+  message?: string; // Current message content
 }
 
 // Specific context creators for different scenarios
@@ -107,6 +109,13 @@ export class ContextBuilder {
   // Metadata
   withMetadata(metadata: Record<string, any>): ContextBuilder {
     this.context.metadata = { ...this.context.metadata, ...metadata };
+    return this;
+  }
+
+  // Message context
+  withMessage(message: string, messageType: string): ContextBuilder {
+    this.context.message = message;
+    this.context.messageType = messageType;
     return this;
   }
 

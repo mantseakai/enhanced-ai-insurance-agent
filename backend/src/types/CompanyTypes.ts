@@ -36,6 +36,8 @@ export interface CompanyConfig {
     instagram?: {
       enabled: boolean;
       accessToken?: string;
+      webhookSecret?: string;
+      businessAccountId?: string;
     };
     facebook?: {
       enabled: boolean;

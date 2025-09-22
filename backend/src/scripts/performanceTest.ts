@@ -33,17 +33,17 @@ class PerformanceTest {
         {
           message: "I need auto insurance for my Toyota Camry",
           userId: "perf_test_1",
-          context: { leadSource: 'whatsapp', productType: 'auto' }
+          context: { platform: 'whatsapp' as const, insuranceType: 'auto' as const }
         },
         {
           message: "How much does comprehensive coverage cost?",
           userId: "perf_test_2",
-          context: { leadSource: 'web_chat', budget: 'medium' }
+          context: { platform: 'webchat' as const, metadata: { budget: 'medium' } }
         },
         {
           message: "Can I pay with MTN MoMo?",
           userId: "perf_test_3",
-          context: { leadSource: 'whatsapp', stage: 'quote' }
+          context: { platform: 'whatsapp' as const, conversationStage: 'quote_request' as const }
         }
       ];
 
@@ -127,7 +127,7 @@ class PerformanceTest {
     const stressQueries = Array.from({ length: 10 }, (_, i) => ({
       message: `Query ${i + 1}: I need insurance information`,
       userId: `stress_user_${i + 1}`,
-      context: { leadSource: 'api_test' }
+      context: { platform: 'api' as const, referralSource: 'api_test' }
     }));
 
     const startTime = Date.now();

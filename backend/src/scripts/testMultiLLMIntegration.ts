@@ -74,25 +74,25 @@ class MultiLLMIntegrationTester {
         provider: 'claude',
         message: 'I need comprehensive auto insurance for my 2019 Toyota Camry',
         userId: 'test_claude_user',
-        context: { leadSource: 'web_chat', productType: 'auto' }
+        context: { platform: 'webchat' as const, insuranceType: 'auto' as const }
       },
       {
         provider: 'local_llama',
         message: 'Can I pay with MTN MoMo?',
         userId: 'test_llama_user', 
-        context: { leadSource: 'whatsapp', stage: 'payment' }
+        context: { platform: 'whatsapp' as const, conversationStage: 'ready_to_buy' as const }
       },
       {
         provider: 'deepseek',
         message: 'How do I make a health insurance claim?',
         userId: 'test_deepseek_user',
-        context: { leadSource: 'whatsapp', productType: 'health' }
+        context: { platform: 'whatsapp' as const, insuranceType: 'health' as const }
       },
       {
         provider: 'openai',
         message: 'What types of business insurance do you offer?',
         userId: 'test_openai_user',
-        context: { leadSource: 'web_chat', productType: 'business' }
+        context: { platform: 'webchat' as const, insuranceType: 'business' as const }
       }
     ];
 
@@ -145,7 +145,7 @@ class MultiLLMIntegrationTester {
       const response = await this.aiService.processMessage(
         testCase.message,
         testCase.userId,
-        { leadSource: 'api_test' }
+        { platform: 'api' as const, referralSource: 'api_test' }
       );
       const responseTime = Date.now() - startTime;
       
@@ -179,7 +179,7 @@ class MultiLLMIntegrationTester {
         const response = await this.aiService.processMessage(
           testMessage,
           `perf_test_${provider}`,
-          { leadSource: 'performance_test' }
+          { platform: 'api' as const, referralSource: 'performance_test' }
         );
         const responseTime = Date.now() - startTime;
         

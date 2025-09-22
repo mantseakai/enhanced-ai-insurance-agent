@@ -640,6 +640,11 @@ export class AIService {
     });
   }
 
+  // Check if AIService is initialized
+  isInitialized(): boolean {
+    return this.initialized;
+  }
+
   // Get service statistics with company breakdown
   getServiceStats() {
     const vectorStats = this.vectorStore ? 
@@ -673,6 +678,43 @@ export class AIService {
     };
   }
 
+  /**
+   * Switch to a specific LLM provider
+   */
+  async switchLLMProvider(providerName: string): Promise<void> {
+    await this.llmManager.setActiveProvider(providerName);
+    console.log(`🔄 Switched to LLM provider: ${providerName}`);
+  }
+
+  /**
+   * Get available LLM providers
+   */
+  getAvailableLLMProviders(): string[] {
+    return this.llmManager.getInitializedProviders();
+  }
+
+  /**
+   * Get current LLM provider
+   */
+  getCurrentLLMProvider(): string {
+    return this.llmManager.getActiveProvider().name;
+  }
+
+  /**
+   * Get LLM provider health status
+   */
+  async getLLMHealthStatus(): Promise<Record<string, any>> {
+    return await this.llmManager.getHealthStatus();
+  }
+
+  /**
+   * Get cost estimates for different providers
+   */
+  getLLMCostEstimates(promptTokens: number, completionTokens: number = 100): Record<string, number> {
+    return this.llmManager.getCostEstimates(promptTokens, completionTokens);
+  }
+
+  
   getPerformanceAnalytics(): any {
     const vectorStats = this.vectorStore ? 
       { provider: this.vectorStore.name, initialized: this.vectorStore.isInitialized } : 

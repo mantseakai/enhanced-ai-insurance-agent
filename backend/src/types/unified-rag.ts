@@ -1,14 +1,34 @@
+
+export interface LeadAnalysisResult {
+  leadId: string;
+  score: number;
+  category: 'hot' | 'warm' | 'cold';
+  confidence: number;
+  reasoning: string[];
+  nextActions: string[];
+  estimatedValue: number;
+  timeline: string;
+  urgencyLevel: 'low' | 'medium' | 'high';
+  buyingSignals: string[];
+  primaryIntent: string;
+  leadReadiness: string;
+  emotionalState: string;
+}
+
 // File: backend/src/types/unified-rag.ts
 // Updated to use UnifiedQueryContext and remove conflicts
 
 import { UnifiedQueryContext, ContextBuilder, ContextValidator, ContextUtils } from './UnifiedContext';
 
 // Import the unified context
-export { 
+export type { 
   UnifiedQueryContext as QueryContext,
   UnifiedQueryContext as EnhancedQueryContext,
   UnifiedQueryContext as CompanyQueryContext,
-  UnifiedQueryContext,
+  UnifiedQueryContext
+} from './UnifiedContext';
+
+export {
   ContextBuilder,
   ContextValidator,
   ContextUtils
@@ -28,6 +48,13 @@ export interface CustomerProfile {
   communicationPreferences?: CommunicationPreferences;
   createdAt: string;
   updatedAt: string;
+
+  // Additional properties for LeadService compatibility
+  incomeRange?: 'low' | 'medium' | 'high' | 'premium';
+  familySize?: number;
+  
+  occupation?: string;
+  previousInsurance?: boolean;
 }
 
 export interface InsuranceHistory {
@@ -125,20 +152,28 @@ export interface AIAnalysis {
   intent: 'quote_request' | 'information_seeking' | 'support' | 'comparison' | 'complaint' | 'greeting' | 'unknown';
   insuranceType: 'auto' | 'health' | 'life' | 'business' | 'property' | 'travel' | 'unknown';
   urgency: 'low' | 'medium' | 'high';
-  leadScore: number; // 0-100
-  extractedInfo: {
-    age?: number;
-    location?: string;
-    specificNeeds?: string[];
-    budget?: number;
-    timeline?: string;
-    currentProvider?: string;
-    [key: string]: any;
-  };
+  leadScore: number;
+  extractedInfo: Record<string, any>;
   nextActions: string[];
-  confidence: number; // 0-1
+  confidence: number;
   reasoning?: string;
   suggestedResponses?: string[];
+  
+  // Required by LeadService
+  primaryIntent?: string;
+  leadReadiness?: string;
+  urgencyLevel?: 'low' | 'medium' | 'high';
+  buyingSignals?: string[];
+  emotionalState?: string;
+  sentiment?: string;
+  
+  // Premium calculation related
+  riskAssessment?: string;
+  premiumSuggestion?: number;
+  
+  // Conversation flow
+  nextQuestions?: string[];
+  shouldEscalate?: boolean;
 }
 
 export interface ContextualQueryResult {

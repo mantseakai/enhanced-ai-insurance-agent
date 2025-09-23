@@ -19,19 +19,54 @@ app.use(cors({
   credentials: true
 }));
 
-// Rate limiting
+// Configure trust proxy more securely
+if (process.env.NODE_ENV === 'production') {
+  // In production, trust specific proxy hops or IP ranges
+  app.set('trust proxy', 1); // Trust first proxy
+} else {
+  // In development, trust all proxies (for ngrok)
+  app.set('trust proxy', true);
+}
+
+// Rate limiting with better configuration
 const limiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
-  max: 100 // limit each IP to 100 requests per windowMs
+  max: 100, // limit each IP to 100 requests per windowMs
+  
+  // Skip rate limiting for development/testing
+  skip: (req) => {
+    return process.env.NODE_ENV === 'development' && 
+           (req.url.includes('/webhook') || req.url.includes('/test-multi-platform'));
+  },
+  
+  // Custom key generator that's more secure
+  keyGenerator: (req) => {
+    return req.ip || req.connection.remoteAddress || 'unknown';
+  },
+  
+  message: {
+    success: false,
+    error: 'Too many requests',
+    message: 'Rate limit exceeded. Please try again later.'
+  }
 });
+
+
 app.use(limiter);
 
 // Body parsing middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Logging
-app.use(morgan('combined'));
+// Routes
+app.use('/api', routes);
+
+
+
+// Enhanced startup initialization
+async function initializeServices() {
+  try {
+    console.log('🚀 Starting AI Insurance Agent - Multi-Platform Edition...');
     
     // Initialize core services in order
     console.log('📊 Initializing Company Manager...');

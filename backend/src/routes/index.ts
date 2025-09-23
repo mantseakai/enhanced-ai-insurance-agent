@@ -19,6 +19,7 @@ const router = Router();
 
 // Register all route modules
 router.use('/companies', companiesRoutes);        // NEW: Company management routes
+router.use('/instagram', instagramRouter);
 router.use('/whatsapp', whatsappRouter);
 router.use('/companies', companiesRouter);
 //router.use('/chat/v2', enhancedChatRoutes);      // Enhanced V2 chat routes
@@ -27,7 +28,7 @@ router.use('/leads', leadsRoutes);               // Lead management routes
 router.use('/whatsapp', whatsappRoutes);         // WhatsApp routes
 
 // NEW: Platform routes
-router.use('/instagram', instagramRouter);
+
 // TODO: Add Facebook, Telegram routes
 // router.use('/facebook', facebookRouter);
 // router.use('/telegram', telegramRouter);
@@ -71,7 +72,8 @@ router.get('/health', async (req, res) => {
         chat: '/api/chat',
         chatV2: '/api/chat/v2',             // Enhanced
         leads: '/api/leads',
-        whatsapp: '/api/whatsapp'           // Enhanced
+        whatsapp: '/api/whatsapp',
+        instagram: '/api/instagram'           // Enhanced
       },
       features: {
         multiCompany: true,                 // NEW
@@ -79,6 +81,7 @@ router.get('/health', async (req, res) => {
         vectorStore: true,
         premiumCalculation: true,
         whatsappIntegration: true,
+        instagramIntegration: true,   // NEW
         caching: true
       },
       //companies: companyStatus              // NEW

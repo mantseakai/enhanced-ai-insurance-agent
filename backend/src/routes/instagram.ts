@@ -17,7 +17,7 @@ router.get('/webhook', (req, res) => {
     console.log('📋 Instagram webhook verification:', { mode, token });
 
     // Verify webhook token (you should set this in your environment)
-    const verifyToken = process.env.INSTAGRAM_VERIFY_TOKEN || 'your_verify_token';
+    const verifyToken = process.env.INSTAGRAM_VERIFY_TOKEN || 'mytoken123';
     
     if (mode === 'subscribe' && token === verifyToken) {
       console.log('✅ Instagram webhook verified');
@@ -34,26 +34,41 @@ router.get('/webhook', (req, res) => {
 });
 
 // Instagram webhook handler
-router.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+router.post('/webhook', express.json(), async (req, res) => {
   try {
     console.log('📨 Instagram webhook received');
+    console.log('📨 Instagram webhook received at:', new Date().toISOString());
+    console.log('📨 Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('📨 Body:', JSON.stringify(req.body, null, 2));
 
-    // Validate webhook signature
-    const signature = req.get('X-Hub-Signature-256');
-    const webhookSecret = process.env.INSTAGRAM_WEBHOOK_SECRET;
+    // The data is already parsed as JSON by express.json()
+    const webhookData = req.body;
     
-    if (signature && webhookSecret) {
-      // Implement signature validation here
-      console.log('🔐 Validating Instagram webhook signature...');
+    console.log('📄 Webhook data:', JSON.stringify(webhookData, null, 2));
+    
+    // Check if this is a message webhook
+    if (webhookData.entry && webhookData.entry.length > 0) {
+      for (const entry of webhookData.entry) {
+        if (entry.messaging) {
+          for (const messagingEvent of entry.messaging) {
+            console.log('💬 Message event:', JSON.stringify(messagingEvent, null, 2));
+            
+            if (messagingEvent.message && messagingEvent.message.text) {
+              const message = messagingEvent.message.text;
+              const senderId = messagingEvent.sender.id;
+              const pageId = messagingEvent.recipient.id;
+              
+              console.log(`📱 Instagram message: "${message}" from ${senderId} to ${pageId}`);
+              
+              // TODO: Process with your AI system
+              // For now, just acknowledge receipt
+              console.log('✅ Instagram message processed');
+            }
+          }
+        }
+      }
     }
-
-    // Parse webhook data
-    const webhookData = JSON.parse(req.body.toString());
     
-    // Process with platform manager
-    const platformManager = PlatformManager.getInstance();
-    await platformManager.processIncomingMessage('instagram', webhookData);
-
     res.status(200).send('OK');
 
   } catch (error) {

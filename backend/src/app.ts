@@ -30,13 +30,8 @@ app.use(limiter);
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Routes
-app.use('/api', routes);
-
-// Enhanced startup initialization
-async function initializeServices() {
-  try {
-    console.log('🚀 Starting AI Insurance Agent - Multi-Platform Edition...');
+// Logging
+app.use(morgan('combined'));
     
     // Initialize core services in order
     console.log('📊 Initializing Company Manager...');
